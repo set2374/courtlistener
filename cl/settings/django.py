@@ -111,7 +111,10 @@ STORAGES = {
 
 if not any([TESTING, DEBUG]):
     STORAGES["staticfiles"] = {
-        "BACKEND": "cl.lib.storage.SubDirectoryS3ManifestStaticStorage",
+        "BACKEND": env(
+            "STATICFILES_BACKEND",
+            default="cl.lib.storage.SubDirectoryS3ManifestStaticStorage",
+        ),
     }
 else:
     STORAGES["staticfiles"] = {
