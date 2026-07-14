@@ -84,10 +84,13 @@ CACHES = {
 
 DEVELOPMENT = env.bool("DEVELOPMENT", default=True)
 if not DEVELOPMENT:
-    CACHES["s3"] = {
-        "BACKEND": "django_s3_express_cache.S3ExpressCacheBackend",
-        "LOCATION": "com-courtlistener-cache--usw2-az1--x-s3",
-    }
+    if env.bool("S3_CACHE_ENABLED", default=True):
+        CACHES["s3"] = {
+            "BACKEND": "django_s3_express_cache.S3ExpressCacheBackend",
+            "LOCATION": "com-courtlistener-cache--usw2-az1--x-s3",
+        }
+    else:
+        CACHES["s3"] = CACHES["default"]
 
 # This sets Redis as the session backend. This is often advised against, but we
 # have pretty good persistency in Redis, so it's fairly well backed up.
