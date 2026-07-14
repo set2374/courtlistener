@@ -1,3 +1,4 @@
+import botocore
 import environ
 
 env = environ.FileAwareEnv()
@@ -24,6 +25,8 @@ AWS_S3_CUSTOM_DOMAIN = "storage.courtlistener.com"
 AWS_DEFAULT_ACL = "public-read"
 AWS_QUERYSTRING_AUTH = False
 AWS_S3_MAX_MEMORY_SIZE = 16 * 1024 * 1024
+if env.bool("AWS_S3_UNSIGNED_REQUESTS", default=False):
+    AWS_S3_SIGNATURE_VERSION = botocore.UNSIGNED
 
 if DEVELOPMENT:
     AWS_STORAGE_BUCKET_NAME = "dev-com-courtlistener-storage"
