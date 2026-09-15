@@ -599,6 +599,7 @@ class IngestionTest(TestCase):
             local_path="",
             plain_text="",
         )
+        opinion.file_with_date = datetime.today()
         opinion.local_path.save(
             "test/search/mislabeled_pdf.ai",
             ContentFile(b"%PDF test content"),
