@@ -554,6 +554,88 @@ class IngestionTest(TestCase):
         txt_opinion.refresh_from_db()
         self.assertIn("ideal", txt_opinion.plain_text.lower())
 
+    def test_extract_content_without_updating_docket_metadata(self) -> None:
+        """Can extraction preserve authoritative docket metadata?"""
+        response = httpx.Response(
+            200,
+            json={
+                "content": "Extracted public opinion text.",
+                "err": "",
+                "extracted_by_ocr": False,
+                "page_count": 1,
+            },
+        )
+        with (
+            mock.patch(
+                "cl.scrapers.tasks.microservice",
+                new=mock.AsyncMock(return_value=response),
+            ),
+            mock.patch(
+                "cl.scrapers.tasks.update_document_from_text"
+            ) as update_metadata_mock,
+            mock.patch.object(Docket, "save") as docket_save_mock,
+            mock.patch("cl.scrapers.tasks.find_and_merge_versions.delay"),
+            mock.patch(
+                "cl.scrapers.tasks."
+                "find_citations_and_parentheticals_for_opinion_by_pks.apply_async"
+            ),
+        ):
+            extract_opinion_content(
+                self.doc_opinion.pk,
+                ocr_available=False,
+                extract_metadata=False,
+            )
+
+        update_metadata_mock.assert_not_called()
+        docket_save_mock.assert_not_called()
+        opinion = Opinion.objects.get(pk=self.doc_opinion.pk)
+        self.assertEqual(opinion.plain_text, "Extracted public opinion text.")
+
+    def test_download_url_can_correct_mislabeled_pdf_path(self) -> None:
+        """Can a provider PDF URL override a misleading stored suffix?"""
+        opinion = OpinionFactory(
+            cluster=self.pdf_opinion.cluster,
+            download_url="https://example.com/opinions/example.pdf?download=1",
+            local_path="",
+            plain_text="",
+        )
+        opinion.local_path.save(
+            "test/search/mislabeled_pdf.ai",
+            ContentFile(b"%PDF test content"),
+        )
+        response = httpx.Response(
+            200,
+            json={
+                "content": "Text from a mislabeled PDF.",
+                "err": "",
+                "extracted_by_ocr": False,
+                "page_count": 1,
+            },
+        )
+        microservice_mock = mock.AsyncMock(return_value=response)
+        with (
+            mock.patch(
+                "cl.scrapers.tasks.microservice", new=microservice_mock
+            ),
+            mock.patch("cl.scrapers.tasks.find_and_merge_versions.delay"),
+            mock.patch(
+                "cl.scrapers.tasks."
+                "find_citations_and_parentheticals_for_opinion_by_pks.apply_async"
+            ),
+        ):
+            extract_opinion_content(
+                opinion.pk,
+                ocr_available=True,
+                extract_metadata=False,
+            )
+
+        call_kwargs = microservice_mock.await_args.kwargs
+        self.assertEqual(call_kwargs["service"], "document-extract")
+        self.assertEqual(call_kwargs["file_type"], "pdf")
+        self.assertNotIn("item", call_kwargs)
+        opinion.refresh_from_db()
+        self.assertEqual(opinion.plain_text, "Text from a mislabeled PDF.")
+
     def test_duplicate_ingestion_warnings(self) -> None:
         """Can we detect duplicate ingestion"""
         with mock.patch.object(logger, "error") as error_mock:

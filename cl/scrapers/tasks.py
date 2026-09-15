@@ -5,6 +5,7 @@ import time
 import traceback
 from collections import defaultdict
 from io import BytesIO
+from urllib.parse import urlsplit
 
 import celery
 import httpx
@@ -129,6 +130,7 @@ def extract_opinion_content(
     juriscraper_module: str = "",
     ocr_available: bool = False,
     percolate_opinion: bool = False,
+    extract_metadata: bool = True,
 ) -> None:
     """
     Given an opinion PK, we extract it, sniffing its extension, then store its
@@ -164,16 +166,31 @@ def extract_opinion_content(
     :param ocr_available: Whether the PDF converting function should use OCR
     :param percolate_opinion: Whether to percolate the related opinion document in
     order to trigger search alerts.
-    larger scrape.
+    :param extract_metadata: Whether to extract and save docket metadata from the
+    opinion text. Disable this when the existing docket metadata is authoritative.
     """
 
     opinion = Opinion.objects.get(pk=pk)
 
-    # Try to extract opinion content without using OCR.
-    response = async_to_sync(microservice)(
-        service="document-extract",
-        item=opinion,
+    local_path_is_pdf = opinion.local_path.name.lower().endswith(".pdf")
+    download_url_is_pdf = (
+        urlsplit(opinion.download_url or "").path.lower().endswith(".pdf")
     )
+    force_pdf_type = download_url_is_pdf and not local_path_is_pdf
+
+    # Try to extract opinion content without using OCR.
+    if force_pdf_type:
+        with opinion.local_path.open(mode="rb") as opinion_file:
+            response = async_to_sync(microservice)(
+                service="document-extract",
+                file=opinion_file,
+                file_type="pdf",
+            )
+    else:
+        response = async_to_sync(microservice)(
+            service="document-extract",
+            item=opinion,
+        )
     if not response.is_success:
         logger.error(
             "Error from document-extract microservice: %s",
@@ -196,13 +213,22 @@ def extract_opinion_content(
     if (
         ocr_available
         and needs_ocr(content)
-        and ".pdf" in str(opinion.local_path)
+        and (local_path_is_pdf or download_url_is_pdf)
     ):
-        response = async_to_sync(microservice)(
-            service="document-extract-ocr",
-            item=opinion,
-            params={"ocr_available": ocr_available},
-        )
+        if force_pdf_type:
+            with opinion.local_path.open(mode="rb") as opinion_file:
+                response = async_to_sync(microservice)(
+                    service="document-extract-ocr",
+                    file=opinion_file,
+                    file_type="pdf",
+                    params={"ocr_available": ocr_available},
+                )
+        else:
+            response = async_to_sync(microservice)(
+                service="document-extract-ocr",
+                item=opinion,
+                params={"ocr_available": ocr_available},
+            )
         if response.is_success:
             content = response.json()["content"]
             extracted_by_ocr = True
@@ -219,7 +245,8 @@ def extract_opinion_content(
     )
 
     set_blocked_status(opinion, content, extension)
-    update_document_from_text(opinion, juriscraper_module)
+    if extract_metadata:
+        update_document_from_text(opinion, juriscraper_module)
 
     if data["err"]:
         logger.error(
@@ -233,10 +260,11 @@ def extract_opinion_content(
     # Save item
     # noinspection PyBroadException
     try:
-        if opinion.cluster.docket.originating_court_information:
-            opinion.cluster.docket.originating_court_information.save()
+        if extract_metadata:
+            if opinion.cluster.docket.originating_court_information:
+                opinion.cluster.docket.originating_court_information.save()
 
-        opinion.cluster.docket.save()
+            opinion.cluster.docket.save()
         opinion.cluster.save()
         opinion.save()
     except Exception:
