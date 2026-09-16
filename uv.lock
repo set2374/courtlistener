@@ -512,7 +512,7 @@ requires-dist = [
     { name = "ipython", specifier = ">=9.9.0" },
     { name = "itypes", specifier = ">=1.1.0" },
     { name = "judge-pics", specifier = ">=2.0.5" },
-    { name = "juriscraper", specifier = ">=3.0.0" },
+    { name = "juriscraper", git = "https://github.com/set2374/juriscraper.git?rev=fab4a5fa8aff4165e55924398dd7ca5a3ac15bc2" },
     { name = "kombu", specifier = ">=5.5.1" },
     { name = "lxml", specifier = ">=6.0.2" },
     { name = "markdown2", specifier = ">=2.5.4" },
@@ -1865,7 +1865,7 @@ wheels = [
 [[package]]
 name = "juriscraper"
 version = "3.0.41"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/set2374/juriscraper.git?rev=fab4a5fa8aff4165e55924398dd7ca5a3ac15bc2#fab4a5fa8aff4165e55924398dd7ca5a3ac15bc2" }
 dependencies = [
     { name = "certifi" },
     { name = "chardet" },
@@ -1881,12 +1881,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-dateutil" },
     { name = "requests" },
-    { name = "selenium" },
     { name = "tldextract" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/62/18/db7e82c99677172474e823a4b59b7b2e891df0f469b934a2e867da9a0d5a/juriscraper-3.0.41.tar.gz", hash = "sha256:a48ee93e7365bdf68f5b38c874a4158b07436193953c0f0587c5b3a86faafca3", size = 469083, upload-time = "2026-09-14T17:14:48.438Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/f2/b488737bd5233874084ac23930ba72ced10771fb4ccb458bef9c76466513/juriscraper-3.0.41-py3-none-any.whl", hash = "sha256:6e2190c8d046ee3623868ff2682e3c584857fcdb25759c7ebe47facfe7fe88ff", size = 706629, upload-time = "2026-09-14T17:14:46.731Z" },
 ]
 
 [[package]]
