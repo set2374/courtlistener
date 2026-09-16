@@ -11,6 +11,7 @@ from celery.canvas import chain
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.postgres.indexes import HashIndex
 from django.core.exceptions import ValidationError
+from django.core.files.storage import default_storage
 from django.db import IntegrityError, models, transaction
 from django.db.models import (
     Case,
@@ -3194,7 +3195,7 @@ class Opinion(AbstractDateTimeModel):
             f"stored. {s3_warning_note}"
         ),
         upload_to=make_upload_path,
-        storage=IncrementingAWSMediaStorage(),
+        storage=default_storage,
         blank=True,
         db_index=True,
     )
@@ -3439,7 +3440,7 @@ class OpinionContent(AbstractDateTimeModel):
             f"stored. {s3_warning_note}"
         ),
         upload_to=make_upload_path,
-        storage=IncrementingAWSMediaStorage(),
+        storage=default_storage,
         blank=True,
         db_index=True,
     )
