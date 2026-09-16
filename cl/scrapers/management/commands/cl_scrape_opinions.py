@@ -492,6 +492,7 @@ class Command(ScraperCommand):
         logger.info("Starting up the scraper.")
         num_courts = len(module_strings)
         wait = (options["rate"] * 60) / num_courts
+        failed_modules = []
         i = 0
         while i < num_courts:
             # this catches SIGTERM, so the code can be killed safely.
@@ -510,9 +511,12 @@ class Command(ScraperCommand):
                 logger.info(f"{court_id} is currently disabled.")
                 i += 1
                 continue
+            logger.info("Starting enabled scraper module: %s", module_string)
             try:
                 async_to_sync(self.parse_and_scrape_site)(mod, options)
             except Exception as e:
+                failed_modules.append(module_string)
+                logger.error("Enabled scraper module failed: %s", module_string)
                 capture_exception(
                     e, fingerprint=[module_string, "{{ default }}"]
                 )
@@ -533,3 +537,8 @@ class Command(ScraperCommand):
             time.sleep(wait)
 
         logger.info("The scraper has stopped.")
+        if failed_modules:
+            raise CommandError(
+                f"{len(failed_modules)} enabled scraper module(s) failed: "
+                f"{', '.join(failed_modules)}"
+            )
