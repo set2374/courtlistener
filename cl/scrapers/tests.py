@@ -1798,6 +1798,55 @@ class OpinionVersionTest(ESIndexTestCase, TransactionTestCase):
         # should ignore due to OpinionCluster.source
         self.assertEqual(should_ignore.main_version, None)
 
+    def test_find_and_merge_versions_skips_an_already_merged_version(self):
+        """Does retrying the task leave an already merged cluster intact?"""
+        docket = DocketFactory(docket_number="already-merged")
+        cluster = OpinionClusterFactory.create(
+            docket=docket, source=ClusterSources.COURT_WEBSITE
+        )
+        main = OpinionFactory.create(
+            cluster=cluster,
+            download_url="https://something.com/already-merged",
+            plain_text="Something ...",
+        )
+        version = OpinionFactory.create(
+            cluster=cluster,
+            download_url=main.download_url,
+            plain_text=main.plain_text,
+            main_version=main,
+        )
+
+        find_and_merge_versions(pk=version.id)
+
+        cluster.refresh_from_db()
+        version.refresh_from_db()
+        self.assertEqual(version.main_version, main)
+
+    def test_find_and_merge_versions_skips_same_cluster_candidates(self):
+        """Does a partial prior merge avoid deleting its surviving cluster?"""
+        docket = DocketFactory(docket_number="same-cluster")
+        cluster = OpinionClusterFactory.create(
+            docket=docket, source=ClusterSources.COURT_WEBSITE
+        )
+        prior = OpinionFactory.create(
+            cluster=cluster,
+            download_url="https://something.com/same-cluster",
+            plain_text="Something ...",
+        )
+        recently_scraped = OpinionFactory.create(
+            cluster=cluster,
+            download_url=prior.download_url,
+            plain_text=prior.plain_text,
+        )
+
+        find_and_merge_versions(pk=recently_scraped.id)
+
+        cluster.refresh_from_db()
+        prior.refresh_from_db()
+        recently_scraped.refresh_from_db()
+        self.assertIsNone(prior.main_version_id)
+        self.assertIsNone(recently_scraped.main_version_id)
+
     def test_docket_source_merging(self):
         """Can we merge Docket sources?"""
         self.assertEqual(
