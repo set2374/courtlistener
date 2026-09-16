@@ -136,6 +136,55 @@ from cl.users.factories import UserProfileWithParentsFactory
 
 
 class ScraperCommandFailureTest(SimpleTestCase):
+    @patch("cl.lib.decorators.asyncio.sleep", new_callable=mock.AsyncMock)
+    def test_transient_source_failures_retry_in_same_run(self, sleep_mock) -> None:
+        request = httpx.Request("GET", "https://example.com/opinions")
+        failures = (
+            httpx.ConnectTimeout("timed out"),
+            httpx.HTTPStatusError(
+                "gateway timeout",
+                request=request,
+                response=httpx.Response(504, request=request),
+            ),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                parsed_site = MagicMock()
+                site = MagicMock()
+                site.parse = mock.AsyncMock(side_effect=[failure, parsed_site])
+                module = MagicMock()
+                module.Site.return_value = site
+                command = cl_scrape_opinions.Command()
+                command.scrape_court = mock.AsyncMock()
+                async_to_sync(command.parse_and_scrape_site)(
+                    module, {"full_crawl": False}
+                )
+                self.assertEqual(site.parse.await_count, 2)
+                command.scrape_court.assert_awaited_once_with(parsed_site, False)
+        self.assertEqual(sleep_mock.await_args_list, [mock.call(5), mock.call(5)])
+
+    @patch("cl.lib.decorators.asyncio.sleep", new_callable=mock.AsyncMock)
+    def test_source_403_is_not_retried(self, sleep_mock) -> None:
+        request = httpx.Request("GET", "https://example.com/opinions")
+        forbidden = httpx.HTTPStatusError(
+            "forbidden",
+            request=request,
+            response=httpx.Response(403, request=request),
+        )
+        site = MagicMock()
+        site.parse = mock.AsyncMock(side_effect=forbidden)
+        module = MagicMock()
+        module.Site.return_value = site
+        command = cl_scrape_opinions.Command()
+        command.scrape_court = mock.AsyncMock()
+        with self.assertRaises(httpx.HTTPStatusError):
+            async_to_sync(command.parse_and_scrape_site)(
+                module, {"full_crawl": False}
+            )
+        self.assertEqual(site.parse.await_count, 1)
+        sleep_mock.assert_not_awaited()
+        command.scrape_court.assert_not_awaited()
+
     @patch.object(cl_scrape_opinions.Court.objects, "aget", new_callable=mock.AsyncMock)
     @patch.object(cl_scrape_opinions, "DupChecker")
     def test_invalid_opinion_document_makes_court_fail(
