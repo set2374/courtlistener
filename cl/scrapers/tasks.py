@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from django.apps import apps
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db.utils import OperationalError
 from django.utils.html import strip_tags
 from httpx import Response
 from juriscraper.lib.exceptions import PacerLoginException
@@ -50,6 +51,7 @@ from cl.search.cluster_sources import ClusterSources
 from cl.search.models import (
     Docket,
     Opinion,
+    OpinionCluster,
     OriginatingCourtInformation,
     RECAPDocument,
 )
@@ -422,7 +424,12 @@ def extract_doc_content(
     )
 
 
-@app.task(bind=True)
+@app.task(
+    bind=True,
+    autoretry_for=(OperationalError, OpinionCluster.DoesNotExist),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def find_and_merge_versions(self, pk: int) -> None:
     """Find versions of the `pk` opinion, and try to merge them
 
@@ -437,6 +444,8 @@ def find_and_merge_versions(self, pk: int) -> None:
     :return None:
     """
     recently_scraped_opinion = Opinion.objects.get(id=pk)
+    if recently_scraped_opinion.main_version_id:
+        return
     if not recently_scraped_opinion.download_url:
         return
     query = get_query_from_url(recently_scraped_opinion.download_url, "exact")
@@ -444,6 +453,7 @@ def find_and_merge_versions(self, pk: int) -> None:
         Opinion.objects.filter(query)
         .filter(cluster__source=ClusterSources.COURT_WEBSITE)
         .exclude(id=pk)
+        .exclude(cluster_id=recently_scraped_opinion.cluster_id)
         .exclude(main_version__isnull=False)
         .order_by("-date_created")
     )
