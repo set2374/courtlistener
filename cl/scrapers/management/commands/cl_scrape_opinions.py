@@ -5,6 +5,7 @@ import traceback
 from datetime import date
 from typing import Any
 
+import httpx
 from asgiref.sync import async_to_sync, sync_to_async
 from django.core.files.base import ContentFile
 from django.core.management.base import CommandError
@@ -18,6 +19,7 @@ from sentry_sdk import capture_exception
 from cl import settings
 from cl.lib.command_utils import ScraperCommand, logger
 from cl.lib.crypto import sha1
+from cl.lib.decorators import retry
 from cl.lib.string_utils import trunc
 from cl.people_db.lookup_utils import lookup_judges_by_messy_str
 from cl.scrapers.DupChecker import DupChecker
@@ -49,6 +51,10 @@ from cl.search.models import (
 # for use in catching the SIGINT (Ctrl+4)
 die_now = False
 cnt = CaseNameTweaker()
+
+
+class TransientOpinionSourceError(Exception):
+    """An upstream court response that is safe to retry briefly."""
 
 
 def set_ordering_keys(opinions_content: list[tuple[dict]]) -> None:
@@ -480,8 +486,20 @@ class Command(ScraperCommand):
                 item["case_names"].encode(),
             )
 
+    @retry(
+        (httpx.TransportError, TransientOpinionSourceError),
+        tries=3,
+        delay=5,
+        backoff=2,
+        logger=logger,
+    )
     async def parse_and_scrape_site(self, mod, options: dict):
-        site = await mod.Site(save_response_fn=save_response).parse()
+        try:
+            site = await mod.Site(save_response_fn=save_response).parse()
+        except httpx.HTTPStatusError as exc:
+            if 500 <= exc.response.status_code < 600:
+                raise TransientOpinionSourceError(str(exc)) from exc
+            raise
         await self.scrape_court(site, options["full_crawl"])
 
     def handle(self, *args, **options):
