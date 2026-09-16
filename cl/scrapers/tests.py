@@ -14,6 +14,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 from django.utils.timezone import now
 from juriscraper.AbstractSite import logger
@@ -132,6 +133,46 @@ from cl.tests.cases import (
 from cl.tests.fixtures import ONE_SECOND_MP3_BYTES, SMALL_WAV_BYTES
 from cl.tests.utils import AsyncAPIClient
 from cl.users.factories import UserProfileWithParentsFactory
+
+
+class ScraperCommandFailureTest(SimpleTestCase):
+    @patch.object(cl_scrape_opinions, "capture_exception")
+    @patch.object(cl_scrape_opinions.time, "sleep")
+    @patch.object(cl_scrape_opinions, "async_to_sync")
+    @patch.object(cl_scrape_opinions.Court.objects, "get")
+    @patch.object(cl_scrape_opinions, "build_module_list")
+    def test_enabled_scraper_failure_makes_command_fail(
+        self,
+        build_module_list_mock,
+        court_get_mock,
+        async_to_sync_mock,
+        sleep_mock,
+        capture_exception_mock,
+    ) -> None:
+        module_path = (
+            "juriscraper.opinions.united_states.federal_appellate.ca1"
+        )
+        build_module_list_mock.return_value = [module_path]
+        court_get_mock.return_value.has_opinion_scraper = True
+        async_to_sync_mock.return_value.side_effect = RuntimeError("boom")
+
+        with patch.object(cl_scrape_opinions, "logger") as logger_mock:
+            with self.assertRaisesMessage(CommandError, module_path):
+                cl_scrape_opinions.Command().handle(
+                    court_id="juriscraper.opinions",
+                    rate=0,
+                    daemon=False,
+                    full_crawl=False,
+                    verbosity=2,
+                )
+
+        logger_mock.info.assert_any_call(
+            "Starting enabled scraper module: %s", module_path
+        )
+        logger_mock.error.assert_called_once_with(
+            "Enabled scraper module failed: %s", module_path
+        )
+        capture_exception_mock.assert_called_once()
 
 
 class ScraperIngestionTest(ESIndexTestCase, TestCase):
