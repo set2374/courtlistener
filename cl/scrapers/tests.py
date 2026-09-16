@@ -18,7 +18,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 from django.utils.timezone import now
 from juriscraper.AbstractSite import logger
-from juriscraper.lib.exceptions import UnexpectedContentTypeError
+from juriscraper.lib.exceptions import BadContentError, UnexpectedContentTypeError
 from juriscraper.scotus.scotus_email import (
     SCOTUSConfirmationResult,
     SCOTUSEmailType,
@@ -136,6 +136,34 @@ from cl.users.factories import UserProfileWithParentsFactory
 
 
 class ScraperCommandFailureTest(SimpleTestCase):
+    @patch.object(cl_scrape_opinions.Court.objects, "aget", new_callable=mock.AsyncMock)
+    @patch.object(cl_scrape_opinions, "DupChecker")
+    def test_invalid_opinion_document_makes_court_fail(
+        self, dup_checker_mock, court_get_mock
+    ) -> None:
+        site = MagicMock()
+        site.court_id = "juriscraper.opinions.united_states.federal_appellate.ca1"
+        site.url = "https://example.com/opinions"
+        site.hash = "page-hash"
+        site.cookies = None
+        site.__len__.return_value = 1
+        site.__iter__.return_value = iter([{"case_dates": date(2026, 9, 15)}])
+        site.__getitem__.side_effect = [IndexError]
+        court_get_mock.return_value = MagicMock(pk="ca1")
+        dup_checker = dup_checker_mock.return_value
+        dup_checker.abort_by_url_hash.return_value = False
+        command = cl_scrape_opinions.Command()
+        command.ingest_a_case = mock.AsyncMock(
+            side_effect=BadContentError("unexpected content type")
+        )
+
+        with self.assertRaisesMessage(
+            CommandError, "skipped 1 opinion(s) with invalid document content"
+        ):
+            async_to_sync(command.scrape_court)(site)
+
+        dup_checker.update_site_hash.assert_not_called()
+
     @patch.object(cl_scrape_opinions, "capture_exception")
     @patch.object(cl_scrape_opinions.time, "sleep")
     @patch.object(cl_scrape_opinions, "async_to_sync")

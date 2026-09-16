@@ -311,6 +311,7 @@ class Command(ScraperCommand):
         update_site_hash = not full_crawl
 
         added = 0
+        skipped_invalid_documents = 0
         for i, item in enumerate(site):
             try:
                 next_date = site[i + 1]["case_dates"]
@@ -329,6 +330,7 @@ class Command(ScraperCommand):
             except (BadContentError, InvalidDocumentError):
                 # do not update site hash to ensure a retry on the next scrape
                 update_site_hash = False
+                skipped_invalid_documents += 1
 
         # Update the hash if everything finishes properly.
         logger.debug(
@@ -341,6 +343,11 @@ class Command(ScraperCommand):
 
         if update_site_hash:
             await sync_to_async(dup_checker.update_site_hash)(site.hash)
+        if skipped_invalid_documents:
+            raise CommandError(
+                f"{site.court_id}: skipped {skipped_invalid_documents} "
+                "opinion(s) with invalid document content"
+            )
 
     async def get_opinions_content(
         self, case_dict: dict, site, court, dup_checker, next_case_date
