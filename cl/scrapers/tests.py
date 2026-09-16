@@ -78,6 +78,7 @@ from cl.scrapers.test_assets import test_opinion_scraper, test_oral_arg_scraper
 from cl.scrapers.utils import (
     case_names_are_too_different,
     check_duplicate_ingestion,
+    save_response,
     get_existing_docket,
     get_extension,
     update_or_create_docket,
@@ -967,6 +968,33 @@ class AudioFileTaskTest(TestCase):
             audio_response.status_code,
             HTTPStatus.OK,
             msg="Unsuccessful audio conversion",
+        )
+
+
+class ScraperResponseStorageTest(SimpleTestCase):
+    @patch("cl.scrapers.utils.default_storage.save")
+    def test_save_response_uses_configured_default_storage(self, mock_save):
+        site = MagicMock()
+        site.court_id = "juriscraper.opinions.united_states.state.ny"
+        site.request = {
+            "response": httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={"results": []},
+            )
+        }
+
+        save_response(site)
+
+        self.assertEqual(mock_save.call_count, 2)
+        saved_names = [call.args[0] for call in mock_save.call_args_list]
+        self.assertRegex(
+            saved_names[0],
+            r"^responses/opinions/ny/\d{4}/\d{2}/\d{2}/\d{2}_\d{2}_\d{2}_headers\.json$",
+        )
+        self.assertRegex(
+            saved_names[1],
+            r"^responses/opinions/ny/\d{4}/\d{2}/\d{2}/\d{2}_\d{2}_\d{2}\.json$",
         )
 
 

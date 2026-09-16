@@ -7,6 +7,7 @@ import httpx
 from asgiref.sync import async_to_sync
 from courts_db import find_court_by_id, find_court_ids_by_name
 from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.db.models import Q
 from eyecite.find import get_citations
 from eyecite.tokenizers import HyperscanTokenizer
@@ -19,7 +20,6 @@ from cl.citations.utils import map_reporter_db_cite_type
 from cl.corpus_importer.utils import winnow_case_name
 from cl.lib.decorators import retry
 from cl.lib.microservice_utils import microservice
-from cl.lib.storage import S3GlacierInstantRetrievalStorage
 from cl.recap.mergers import find_docket_object
 from cl.search.models import (
     Citation,
@@ -462,7 +462,6 @@ def save_response(site: AbstractSite) -> None:
     :return None
     """
 
-    storage = S3GlacierInstantRetrievalStorage()
     response = site.request["response"]
 
     scraper_id = site.court_id.split(".")[-1]
@@ -471,7 +470,9 @@ def save_response(site: AbstractSite) -> None:
     base_name = f"responses/{scrape_type}/{scraper_id}/{now_str}"
 
     headers_json = json.dumps(dict(response.headers), indent=4)
-    storage.save(f"{base_name}_headers.json", ContentFile(headers_json))
+    default_storage.save(
+        f"{base_name}_headers.json", ContentFile(headers_json)
+    )
 
     try:
         # both tests for and parses JSON content
@@ -482,7 +483,7 @@ def save_response(site: AbstractSite) -> None:
         extension = "html"
 
     content_name = f"{base_name}.{extension}"
-    storage.save(content_name, ContentFile(content))
+    default_storage.save(content_name, ContentFile(content))
 
 
 def check_duplicate_ingestion(local_path_name: str) -> None:
