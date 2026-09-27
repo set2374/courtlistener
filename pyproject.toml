@@ -141,6 +141,9 @@ dev = [
   "responses>=0.25.8",
 ]
 
+[tool.uv.sources]
+juriscraper = { git = "https://github.com/set2374/juriscraper.git", rev = "4b65ac7a6e41840b8048a552fd9f0f9780ba84aa" }
+
 [tool.ruff]
 line-length = 79
 lint.extend-safe-fixes = [
