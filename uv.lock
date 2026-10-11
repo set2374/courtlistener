@@ -512,7 +512,7 @@ requires-dist = [
     { name = "ipython", specifier = ">=9.9.0" },
     { name = "itypes", specifier = ">=1.1.0" },
     { name = "judge-pics", specifier = ">=2.0.5" },
-    { name = "juriscraper", git = "https://github.com/set2374/juriscraper.git?rev=ec2313311017dc69b74f031b29eb4d7cc954564c" },
+    { name = "juriscraper", git = "https://github.com/set2374/juriscraper.git?rev=ce40bb8bdaec10749e0fdd2c084394f8796ccc79" },
     { name = "kombu", specifier = ">=5.5.1" },
     { name = "lxml", specifier = ">=6.1.1" },
     { name = "markdown2", specifier = ">=2.5.4" },
@@ -1869,7 +1869,7 @@ wheels = [
 [[package]]
 name = "juriscraper"
 version = "3.0.44"
-source = { git = "https://github.com/set2374/juriscraper.git?rev=ec2313311017dc69b74f031b29eb4d7cc954564c#ec2313311017dc69b74f031b29eb4d7cc954564c" }
+source = { git = "https://github.com/set2374/juriscraper.git?rev=ce40bb8bdaec10749e0fdd2c084394f8796ccc79#ce40bb8bdaec10749e0fdd2c084394f8796ccc79" }
 dependencies = [
     { name = "certifi" },
     { name = "chardet" },
