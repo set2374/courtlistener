@@ -5,6 +5,7 @@ import traceback
 from datetime import date
 from typing import Any
 
+import httpx
 from asgiref.sync import async_to_sync, sync_to_async
 from django.core.files.base import ContentFile
 from django.core.management.base import CommandError
@@ -18,6 +19,7 @@ from sentry_sdk import capture_exception
 from cl import settings
 from cl.lib.command_utils import ScraperCommand, logger
 from cl.lib.crypto import sha1
+from cl.lib.decorators import retry
 from cl.lib.string_utils import trunc
 from cl.people_db.lookup_utils import lookup_judges_by_messy_str
 from cl.scrapers.DupChecker import DupChecker
@@ -49,6 +51,10 @@ from cl.search.models import (
 # for use in catching the SIGINT (Ctrl+4)
 die_now = False
 cnt = CaseNameTweaker()
+
+
+class TransientOpinionSourceError(Exception):
+    """An upstream court response that is safe to retry briefly."""
 
 
 def set_ordering_keys(opinions_content: list[tuple[dict]]) -> None:
@@ -317,6 +323,7 @@ class Command(ScraperCommand):
         update_site_hash = not full_crawl
 
         added = 0
+        skipped_invalid_documents = 0
         for i, item in enumerate(site):
             try:
                 next_date = site[i + 1]["case_dates"]
@@ -335,6 +342,7 @@ class Command(ScraperCommand):
             except (BadContentError, InvalidDocumentError):
                 # do not update site hash to ensure a retry on the next scrape
                 update_site_hash = False
+                skipped_invalid_documents += 1
 
         # Update the hash if everything finishes properly.
         logger.debug(
@@ -347,6 +355,11 @@ class Command(ScraperCommand):
 
         if update_site_hash:
             await sync_to_async(dup_checker.update_site_hash)(site.hash)
+        if skipped_invalid_documents:
+            raise CommandError(
+                f"{site.court_id}: skipped {skipped_invalid_documents} "
+                "opinion(s) with invalid document content"
+            )
 
     async def get_opinions_content(
         self, case_dict: dict, site, court, dup_checker, next_case_date
@@ -479,8 +492,20 @@ class Command(ScraperCommand):
                 item["case_names"].encode(),
             )
 
+    @retry(
+        (httpx.TransportError, TransientOpinionSourceError),
+        tries=3,
+        delay=5,
+        backoff=2,
+        logger=logger,
+    )
     async def parse_and_scrape_site(self, mod, options: dict):
-        site = await mod.Site(save_response_fn=save_response).parse()
+        try:
+            site = await mod.Site(save_response_fn=save_response).parse()
+        except httpx.HTTPStatusError as exc:
+            if 500 <= exc.response.status_code < 600:
+                raise TransientOpinionSourceError(str(exc)) from exc
+            raise
         await self.scrape_court(site, options["full_crawl"])
 
     def handle(self, *args, **options):
@@ -498,6 +523,7 @@ class Command(ScraperCommand):
         logger.info("Starting up the scraper.")
         num_courts = len(module_strings)
         wait = (options["rate"] * 60) / num_courts
+        failed_modules: set[str] = set()
         i = 0
         while i < num_courts:
             # this catches SIGTERM, so the code can be killed safely.
@@ -516,9 +542,14 @@ class Command(ScraperCommand):
                 logger.info(f"{court_id} is currently disabled.")
                 i += 1
                 continue
+            logger.info("Starting enabled scraper module: %s", module_string)
             try:
                 async_to_sync(self.parse_and_scrape_site)(mod, options)
             except Exception as e:
+                failed_modules.add(module_string)
+                logger.error(
+                    "Enabled scraper module failed: %s", module_string
+                )
                 capture_exception(
                     e, fingerprint=[module_string, "{{ default }}"]
                 )
@@ -539,3 +570,8 @@ class Command(ScraperCommand):
             time.sleep(wait)
 
         logger.info("The scraper has stopped.")
+        if failed_modules:
+            raise CommandError(
+                f"{len(failed_modules)} enabled scraper module(s) failed: "
+                f"{', '.join(sorted(failed_modules))}"
+            )
