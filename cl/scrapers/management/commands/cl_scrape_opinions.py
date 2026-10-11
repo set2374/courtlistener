@@ -5,6 +5,7 @@ import time
 import traceback
 from datetime import date
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import httpx
@@ -58,6 +59,10 @@ cnt = CaseNameTweaker()
 
 class TransientOpinionSourceError(Exception):
     """An upstream court response that is safe to retry briefly."""
+
+
+TRANSIENT_SOURCE_ERRORS = (httpx.TransportError, TransientOpinionSourceError)
+DELAYED_RETRY_SECONDS = 60
 
 
 def set_ordering_keys(opinions_content: list[tuple[dict]]) -> None:
@@ -603,7 +608,7 @@ class Command(ScraperCommand):
             )
 
     @retry(
-        (httpx.TransportError, TransientOpinionSourceError),
+        TRANSIENT_SOURCE_ERRORS,
         tries=3,
         delay=5,
         backoff=2,
@@ -644,6 +649,7 @@ class Command(ScraperCommand):
         num_courts = len(module_strings)
         wait = (options["rate"] * 60) / num_courts
         failed_modules: set[str] = set()
+        transient_failures: list[tuple[str, ModuleType]] = []
         i = 0
         while i < num_courts:
             # this catches SIGTERM, so the code can be killed safely.
@@ -665,6 +671,24 @@ class Command(ScraperCommand):
             logger.info("Starting enabled scraper module: %s", module_string)
             try:
                 async_to_sync(self.parse_and_scrape_site)(mod, options)
+            except TRANSIENT_SOURCE_ERRORS as e:
+                if options["daemon"]:
+                    failed_modules.add(module_string)
+                    logger.error(
+                        "Enabled scraper module failed: %s", module_string
+                    )
+                    capture_exception(
+                        e, fingerprint=[module_string, "{{ default }}"]
+                    )
+                    logger.debug(traceback.format_exc())
+                else:
+                    transient_failures.append((module_string, mod))
+                    logger.warning(
+                        "Enabled scraper module queued for delayed retry: "
+                        "%s: %s",
+                        module_string,
+                        e,
+                    )
             except Exception as e:
                 failed_modules.add(module_string)
                 logger.error(
@@ -688,6 +712,38 @@ class Command(ScraperCommand):
             else:
                 i += 1
             time.sleep(wait)
+
+        if transient_failures and not options["daemon"]:
+            logger.info(
+                "Waiting %s seconds before retrying %s transient scraper "
+                "module(s).",
+                DELAYED_RETRY_SECONDS,
+                len(transient_failures),
+            )
+            time.sleep(DELAYED_RETRY_SECONDS)
+            for module_string, mod in transient_failures:
+                logger.info(
+                    "Retrying enabled scraper module after transient "
+                    "failure: %s",
+                    module_string,
+                )
+                try:
+                    async_to_sync(self.parse_and_scrape_site)(mod, options)
+                except Exception as e:
+                    failed_modules.add(module_string)
+                    logger.error(
+                        "Enabled scraper module failed: %s", module_string
+                    )
+                    capture_exception(
+                        e, fingerprint=[module_string, "{{ default }}"]
+                    )
+                    logger.debug(traceback.format_exc())
+                else:
+                    logger.info(
+                        "Enabled scraper module recovered after delayed "
+                        "retry: %s",
+                        module_string,
+                    )
 
         logger.info("The scraper has stopped.")
         if failed_modules:
