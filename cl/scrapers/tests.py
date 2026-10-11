@@ -20,6 +20,9 @@ from django.utils.encoding import force_bytes
 from django.utils.timezone import now
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.exceptions import UnexpectedContentTypeError
+from juriscraper.opinions.united_states.state.tenn_workers_comp import (
+    Site as TennesseeWorkersCompSite,
+)
 from juriscraper.scotus.scotus_email import (
     SCOTUSConfirmationResult,
     SCOTUSEmailType,
@@ -83,6 +86,7 @@ from cl.scrapers.utils import (
     check_duplicate_ingestion,
     get_existing_docket,
     get_extension,
+    save_response,
     update_or_create_docket,
 )
 from cl.search.cluster_sources import ClusterSources
@@ -3335,6 +3339,27 @@ class OpinionSweepControllerTest(SimpleTestCase):
         source = inventory["sources"][0]
         self.assertEqual(source["source_id"], module_path)
         self.assertEqual(source["court_id"], "tennworkcompapp")
+
+    def test_tennessee_workers_comp_identity_saves_as_opinion_response(self):
+        site = TennesseeWorkersCompSite()
+        site.request["response"] = MagicMock(
+            headers={}, content=b"<html></html>"
+        )
+        with patch(
+            "cl.scrapers.utils.S3GlacierInstantRetrievalStorage"
+        ) as storage:
+            save_response(site)
+
+        saved_names = [
+            call.args[0] for call in storage.return_value.save.call_args_list
+        ]
+        self.assertEqual(len(saved_names), 2)
+        self.assertTrue(
+            all(
+                name.startswith("responses/opinions/tennworkcompapp/")
+                for name in saved_names
+            )
+        )
 
     def test_inventory_only_does_not_fetch_publishers(self):
         module_path = test_opinion_scraper.__name__
