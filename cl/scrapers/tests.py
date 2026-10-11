@@ -14,6 +14,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase
 from django.utils.encoding import force_bytes
 from django.utils.timezone import now
@@ -3055,3 +3056,98 @@ class AccountSubscriptionIncludeTest(TestCase):
         self.assertEqual(
             self.subscription.last_subscription, date(2025, 3, 15)
         )
+
+
+class OpinionSweepControllerTest(SimpleTestCase):
+    """The multi-court command must report every enabled-source failure."""
+
+    def command_options(self) -> dict:
+        return {
+            "court_id": "juriscraper.opinions.united_states",
+            "rate": 0,
+            "daemon": False,
+            "full_crawl": False,
+            "verbosity": 2,
+        }
+
+    def test_handle_marks_a_failed_enabled_module_and_exits_nonzero(self):
+        module_path = test_opinion_scraper.__name__
+        command = cl_scrape_opinions.Command()
+        with (
+            patch.object(
+                cl_scrape_opinions,
+                "build_module_list",
+                return_value=[module_path],
+            ),
+            patch.object(cl_scrape_opinions.signal, "signal"),
+            patch.object(cl_scrape_opinions.time, "sleep"),
+            patch.object(
+                cl_scrape_opinions.Court.objects,
+                "get",
+                return_value=MagicMock(has_opinion_scraper=True),
+            ),
+            patch.object(
+                command,
+                "parse_and_scrape_site",
+                new=mock.AsyncMock(
+                    side_effect=RuntimeError("publisher failed")
+                ),
+            ),
+            patch.object(cl_scrape_opinions, "capture_exception") as capture,
+            patch.object(cl_scrape_opinions.logger, "info") as info,
+            patch.object(cl_scrape_opinions.logger, "error") as error,
+        ):
+            with self.assertRaisesRegex(
+                CommandError, "1 enabled scraper module"
+            ):
+                command.handle(**self.command_options())
+
+        module_string = test_opinion_scraper.Site().court_id
+        info.assert_any_call(
+            "Starting enabled scraper module: %s", module_string
+        )
+        error.assert_any_call(
+            "Enabled scraper module failed: %s", module_string
+        )
+        capture.assert_called_once()
+
+    def test_transient_server_error_is_retried(self):
+        command = cl_scrape_opinions.Command()
+        request = httpx.Request("GET", "https://court.example/opinions")
+        response = httpx.Response(503, request=request)
+        server_error = httpx.HTTPStatusError(
+            "service unavailable", request=request, response=response
+        )
+        parsed_site = MagicMock()
+        module = MagicMock()
+        module.Site.return_value.parse = mock.AsyncMock(
+            side_effect=[server_error, parsed_site]
+        )
+        command.scrape_court = mock.AsyncMock()
+
+        with patch("cl.lib.decorators.asyncio.sleep", new=mock.AsyncMock()):
+            async_to_sync(command.parse_and_scrape_site)(
+                module, {"full_crawl": False}
+            )
+
+        self.assertEqual(module.Site.return_value.parse.await_count, 2)
+        command.scrape_court.assert_awaited_once_with(parsed_site, False)
+
+    def test_client_error_is_not_retried(self):
+        command = cl_scrape_opinions.Command()
+        request = httpx.Request("GET", "https://court.example/opinions")
+        response = httpx.Response(404, request=request)
+        client_error = httpx.HTTPStatusError(
+            "not found", request=request, response=response
+        )
+        module = MagicMock()
+        module.Site.return_value.parse = mock.AsyncMock(
+            side_effect=client_error
+        )
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            async_to_sync(command.parse_and_scrape_site)(
+                module, {"full_crawl": False}
+            )
+
+        self.assertEqual(module.Site.return_value.parse.await_count, 1)
