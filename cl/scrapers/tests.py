@@ -3151,3 +3151,112 @@ class OpinionSweepControllerTest(SimpleTestCase):
             )
 
         self.assertEqual(module.Site.return_value.parse.await_count, 1)
+
+    def test_source_inventory_uses_native_court_identity(self):
+        court = MagicMock(
+            id="test",
+            full_name="Test Supreme Court",
+            short_name="Test Court",
+            jurisdiction="S",
+            in_use=True,
+            has_opinion_scraper=True,
+            url="https://court.example/",
+            start_date=date(1900, 1, 1),
+            end_date=None,
+        )
+        court_match = {
+            "id": "test",
+            "name": "Test Supreme Court",
+            "location": "Test State",
+            "system": "state",
+            "type": "appellate",
+            "court_url": "https://court.example/",
+            "regex": ["must not be copied into the inventory"],
+        }
+        with (
+            patch.object(
+                cl_scrape_opinions.Court.objects,
+                "get",
+                return_value=court,
+            ),
+            patch.object(
+                cl_scrape_opinions,
+                "find_court_by_id",
+                return_value=[court_match],
+            ),
+        ):
+            inventory = cl_scrape_opinions.Command.build_source_inventory(
+                [test_opinion_scraper.__name__]
+            )
+
+        self.assertIs(inventory["inventory_complete"], True)
+        self.assertIs(inventory["courts_db_reconciliation_complete"], True)
+        self.assertEqual(inventory["source_count"], 1)
+        self.assertEqual(inventory["enabled_source_count"], 1)
+        source = inventory["sources"][0]
+        self.assertEqual(source["court_id"], "test")
+        self.assertEqual(source["court"]["jurisdiction"], "S")
+        self.assertEqual(
+            source["courts_db_matches"][0]["location"], "Test State"
+        )
+        self.assertNotIn("regex", source["courts_db_matches"][0])
+
+    def test_inventory_only_does_not_fetch_publishers(self):
+        module_path = test_opinion_scraper.__name__
+        command = cl_scrape_opinions.Command()
+        command.parse_and_scrape_site = mock.AsyncMock()
+        with (
+            patch.object(
+                cl_scrape_opinions,
+                "build_module_list",
+                return_value=[module_path],
+            ),
+            patch.object(
+                command,
+                "write_source_inventory",
+                return_value={
+                    "inventory_complete": True,
+                    "unmatched_court_ids": [],
+                },
+            ) as write_inventory,
+        ):
+            command.handle(
+                **self.command_options(),
+                source_inventory_json="-",
+                source_inventory_only=True,
+            )
+
+        write_inventory.assert_called_once_with([module_path], "-")
+        command.parse_and_scrape_site.assert_not_awaited()
+
+    def test_unmatched_courts_db_identity_is_reported_separately(self):
+        court = MagicMock(
+            id="test",
+            full_name="Test Supreme Court",
+            short_name="Test Court",
+            jurisdiction="S",
+            in_use=True,
+            has_opinion_scraper=True,
+            url="https://court.example/",
+            start_date=None,
+            end_date=None,
+        )
+        with (
+            patch.object(
+                cl_scrape_opinions.Court.objects,
+                "get",
+                return_value=court,
+            ),
+            patch.object(
+                cl_scrape_opinions,
+                "find_court_by_id",
+                return_value=[],
+            ),
+        ):
+            inventory = cl_scrape_opinions.Command.build_source_inventory(
+                [test_opinion_scraper.__name__]
+            )
+
+        self.assertIs(inventory["inventory_complete"], True)
+        self.assertIs(inventory["courts_db_reconciliation_complete"], False)
+        self.assertEqual(inventory["unmatched_court_ids"], ["test"])

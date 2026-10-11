@@ -1,12 +1,15 @@
+import json
 import signal
 import sys
 import time
 import traceback
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import httpx
 from asgiref.sync import async_to_sync, sync_to_async
+from courts_db import find_court_by_id
 from django.core.files.base import ContentFile
 from django.core.management.base import CommandError
 from django.db import transaction
@@ -294,6 +297,113 @@ class Command(ScraperCommand):
             default=False,
             help="Disable duplicate aborting.",
         )
+        parser.add_argument(
+            "--source-inventory-json",
+            help=(
+                "Write the native scraper, court, and public-source identity "
+                "inventory to this path; use '-' for stdout."
+            ),
+        )
+        parser.add_argument(
+            "--source-inventory-only",
+            action="store_true",
+            default=False,
+            help="Write the requested source inventory without scraping.",
+        )
+
+    @staticmethod
+    def build_source_inventory(module_strings: list[str]) -> dict[str, Any]:
+        """Return native source identities without fetching publisher data."""
+        sources = []
+        unmatched_courts = []
+        for module_string in module_strings:
+            package, module = module_string.rsplit(".", 1)
+            mod = __import__(
+                f"{package}.{module}", globals(), locals(), [module]
+            )
+            site = mod.Site()
+            source_id = site.court_id
+            court_id = source_id.split(".")[-1].split("_")[0]
+            court = Court.objects.get(id=court_id)
+            court_matches = find_court_by_id(court_id)
+            if not court_matches:
+                unmatched_courts.append(court_id)
+            sources.append(
+                {
+                    "source_id": source_id,
+                    "court_id": court_id,
+                    "enabled": court.has_opinion_scraper,
+                    "court": {
+                        "id": court.id,
+                        "full_name": court.full_name,
+                        "short_name": court.short_name,
+                        "jurisdiction": court.jurisdiction,
+                        "in_use": court.in_use,
+                        "url": court.url,
+                        "start_date": (
+                            court.start_date.isoformat()
+                            if court.start_date
+                            else None
+                        ),
+                        "end_date": (
+                            court.end_date.isoformat()
+                            if court.end_date
+                            else None
+                        ),
+                    },
+                    "scraper": {
+                        "url": getattr(site, "url", None),
+                        "base_url": getattr(site, "base_url", None),
+                        "status": getattr(site, "status", None),
+                    },
+                    "courts_db_matches": [
+                        {
+                            key: match.get(key)
+                            for key in (
+                                "id",
+                                "name",
+                                "location",
+                                "system",
+                                "type",
+                                "level",
+                                "active",
+                                "dates",
+                                "court_url",
+                            )
+                            if key in match
+                        }
+                        for match in court_matches
+                    ],
+                }
+            )
+        return {
+            "schema_version": 1,
+            "inventory_complete": True,
+            "courts_db_reconciliation_complete": not unmatched_courts,
+            "source_count": len(sources),
+            "enabled_source_count": sum(
+                1 for source in sources if source["enabled"]
+            ),
+            "unmatched_court_ids": sorted(set(unmatched_courts)),
+            "sources": sorted(sources, key=lambda source: source["source_id"]),
+        }
+
+    def write_source_inventory(
+        self, module_strings: list[str], output: str
+    ) -> dict[str, Any]:
+        inventory = self.build_source_inventory(module_strings)
+        serialized = json.dumps(inventory, indent=2, sort_keys=True) + "\n"
+        if output == "-":
+            self.stdout.write(serialized, ending="")
+        else:
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = output_path.with_suffix(
+                output_path.suffix + ".tmp"
+            )
+            temporary_path.write_text(serialized, encoding="utf-8")
+            temporary_path.replace(output_path)
+        return inventory
 
     async def scrape_court(
         self,
@@ -519,6 +629,16 @@ class Command(ScraperCommand):
         module_strings = build_module_list(options["court_id"])
         if not len(module_strings):
             raise CommandError("Unable to import module or package. Aborting.")
+
+        inventory_output = options.get("source_inventory_json")
+        if options.get("source_inventory_only") and not inventory_output:
+            raise CommandError(
+                "--source-inventory-only requires --source-inventory-json"
+            )
+        if inventory_output:
+            self.write_source_inventory(module_strings, inventory_output)
+        if options.get("source_inventory_only"):
+            return
 
         logger.info("Starting up the scraper.")
         num_courts = len(module_strings)
