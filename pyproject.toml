@@ -142,7 +142,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-juriscraper = { git = "https://github.com/set2374/juriscraper.git", rev = "2cc62d4745b83533ed3eafa8cd84a14436177d8f" }
+juriscraper = { git = "https://github.com/set2374/juriscraper.git", rev = "30b46df5b64f4987fe2af1ca34b8a410d8931071" }
 
 [tool.ruff]
 line-length = 79
