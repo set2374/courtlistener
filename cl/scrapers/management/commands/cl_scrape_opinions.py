@@ -327,8 +327,8 @@ class Command(ScraperCommand):
                 f"{package}.{module}", globals(), locals(), [module]
             )
             site = mod.Site()
-            source_id = site.court_id
-            court_id = source_id.split(".")[-1].split("_")[0]
+            source_id = module_string
+            court_id = site.court_id.split(".")[-1].split("_")[0]
             court = Court.objects.get(id=court_id)
             court_matches = find_court_by_id(court_id)
             if not court_matches:
@@ -662,8 +662,8 @@ class Command(ScraperCommand):
             mod = __import__(
                 f"{package}.{module}", globals(), locals(), [module]
             )
-            module_string = mod.Site().court_id
-            court_id = module_string.split(".")[-1].split("_")[0]
+            module_string = module_strings[i]
+            court_id = mod.Site().court_id.split(".")[-1].split("_")[0]
             if not Court.objects.get(id=court_id).has_opinion_scraper:
                 logger.info(f"{court_id} is currently disabled.")
                 i += 1

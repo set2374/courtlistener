@@ -3111,6 +3111,33 @@ class OpinionSweepControllerTest(SimpleTestCase):
         )
         capture.assert_called_once()
 
+    def test_handle_logs_stable_module_identity_for_distinct_court_id(self):
+        module_path = (
+            "juriscraper.opinions.united_states.state.tenn_workers_comp"
+        )
+        command = cl_scrape_opinions.Command()
+        command.parse_and_scrape_site = mock.AsyncMock()
+        with (
+            patch.object(
+                cl_scrape_opinions,
+                "build_module_list",
+                return_value=[module_path],
+            ),
+            patch.object(cl_scrape_opinions.signal, "signal"),
+            patch.object(cl_scrape_opinions.time, "sleep"),
+            patch.object(
+                cl_scrape_opinions.Court.objects,
+                "get",
+                return_value=MagicMock(has_opinion_scraper=True),
+            ),
+            patch.object(cl_scrape_opinions.logger, "info") as info,
+        ):
+            command.handle(**self.command_options())
+
+        info.assert_any_call(
+            "Starting enabled scraper module: %s", module_path
+        )
+
     def test_handle_retries_transient_module_after_first_pass(self):
         module_path = test_opinion_scraper.__name__
         module_string = test_opinion_scraper.Site().court_id
@@ -3273,6 +3300,41 @@ class OpinionSweepControllerTest(SimpleTestCase):
             source["courts_db_matches"][0]["location"], "Test State"
         )
         self.assertNotIn("regex", source["courts_db_matches"][0])
+
+    def test_source_inventory_separates_module_and_court_identity(self):
+        module_path = (
+            "juriscraper.opinions.united_states.state.tenn_workers_comp"
+        )
+        court = MagicMock(
+            id="tennworkcompapp",
+            full_name="Tennessee Workers' Compensation Appeals Board",
+            short_name="Tennessee Workers' Comp. Appeals Board",
+            jurisdiction="SS",
+            in_use=True,
+            has_opinion_scraper=True,
+            url="https://www.tn.gov/workforce/appeals-board.html",
+            start_date=date(2013, 1, 1),
+            end_date=None,
+        )
+        with (
+            patch.object(
+                cl_scrape_opinions.Court.objects,
+                "get",
+                return_value=court,
+            ),
+            patch.object(
+                cl_scrape_opinions,
+                "find_court_by_id",
+                return_value=[],
+            ),
+        ):
+            inventory = cl_scrape_opinions.Command.build_source_inventory(
+                [module_path]
+            )
+
+        source = inventory["sources"][0]
+        self.assertEqual(source["source_id"], module_path)
+        self.assertEqual(source["court_id"], "tennworkcompapp")
 
     def test_inventory_only_does_not_fetch_publishers(self):
         module_path = test_opinion_scraper.__name__
