@@ -3111,6 +3111,79 @@ class OpinionSweepControllerTest(SimpleTestCase):
         )
         capture.assert_called_once()
 
+    def test_handle_retries_transient_module_after_first_pass(self):
+        module_path = test_opinion_scraper.__name__
+        module_string = test_opinion_scraper.Site().court_id
+        command = cl_scrape_opinions.Command()
+        transient_error = httpx.ConnectTimeout("publisher timed out")
+        parse = mock.AsyncMock(side_effect=[transient_error, None])
+        with (
+            patch.object(
+                cl_scrape_opinions,
+                "build_module_list",
+                return_value=[module_path],
+            ),
+            patch.object(cl_scrape_opinions.signal, "signal"),
+            patch.object(cl_scrape_opinions.time, "sleep") as sleep,
+            patch.object(
+                cl_scrape_opinions.Court.objects,
+                "get",
+                return_value=MagicMock(has_opinion_scraper=True),
+            ),
+            patch.object(command, "parse_and_scrape_site", new=parse),
+            patch.object(cl_scrape_opinions, "capture_exception") as capture,
+            patch.object(cl_scrape_opinions.logger, "warning") as warning,
+            patch.object(cl_scrape_opinions.logger, "error") as error,
+        ):
+            command.handle(**self.command_options())
+
+        self.assertEqual(parse.await_count, 2)
+        warning.assert_called_once_with(
+            "Enabled scraper module queued for delayed retry: %s: %s",
+            module_string,
+            transient_error,
+        )
+        sleep.assert_any_call(cl_scrape_opinions.DELAYED_RETRY_SECONDS)
+        error.assert_not_called()
+        capture.assert_not_called()
+
+    def test_handle_marks_failed_transient_module_after_delayed_retry(self):
+        module_path = test_opinion_scraper.__name__
+        module_string = test_opinion_scraper.Site().court_id
+        command = cl_scrape_opinions.Command()
+        transient_error = httpx.ConnectTimeout("publisher timed out")
+        parse = mock.AsyncMock(side_effect=[transient_error, transient_error])
+        with (
+            patch.object(
+                cl_scrape_opinions,
+                "build_module_list",
+                return_value=[module_path],
+            ),
+            patch.object(cl_scrape_opinions.signal, "signal"),
+            patch.object(cl_scrape_opinions.time, "sleep"),
+            patch.object(
+                cl_scrape_opinions.Court.objects,
+                "get",
+                return_value=MagicMock(has_opinion_scraper=True),
+            ),
+            patch.object(command, "parse_and_scrape_site", new=parse),
+            patch.object(cl_scrape_opinions, "capture_exception") as capture,
+            patch.object(cl_scrape_opinions.logger, "error") as error,
+        ):
+            with self.assertRaisesRegex(
+                CommandError, "1 enabled scraper module"
+            ):
+                command.handle(**self.command_options())
+
+        self.assertEqual(parse.await_count, 2)
+        error.assert_called_once_with(
+            "Enabled scraper module failed: %s", module_string
+        )
+        capture.assert_called_once_with(
+            transient_error,
+            fingerprint=[module_string, "{{ default }}"],
+        )
+
     def test_transient_server_error_is_retried(self):
         command = cl_scrape_opinions.Command()
         request = httpx.Request("GET", "https://court.example/opinions")
